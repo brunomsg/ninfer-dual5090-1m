@@ -21,6 +21,31 @@ and this validated recipe. See [CREDITS.md](CREDITS.md); the upstream engine REA
 | Vision | image and video |
 | GPU memory at 1M | ≈27–29 GiB per GPU (~3–6 GiB free) |
 
+## What we tried, and why this one
+
+The engines evaluated for this box (our own measurements on the same two RTX 5090s, short-answer
+decode unless noted):
+
+| Engine | GPUs | Quant | Context | 1 req | 4-conc (agg / session) | Vision | Host cache | MTP | Outcome |
+|---|---|---|---|---|---|---|---|---|---|
+| SGLang + DFlash2 | TP2 | NVFP4 | 1M | ~170 | 64 / **16** | yes | HiCache (118×) | DFlash2 (died live) | rejected: concurrency collapses over PCIe TP2 |
+| TensorFold 1.2.6 | 1 | NVFP4 | **32K** | **200** | 404 / 101 | yes | no | no | rejected: 32K only, no 1M, no cache |
+| wamansou NInfer (`ninfer-tp2-1m`) | TP2 | NVFP4 | 1M | 146 | 411 / 103 | no | no | yes | rejected: no vision, no host cache |
+| gzenz NInfer | TP2 | NVFP4 | 1M | — | — | no | yes (prefill `bad_alloc`) | yes | rejected: host-cache prefill bug |
+| **ninfer-all IQ3_S** (this fork) | TP2 | IQ3_S | **1M** | ~196 | 415 / **104** | yes | **32 GB** | yes | **chosen** |
+
+Only ninfer-all keeps **1M + vision + host prefix cache + MTP** together, with the best per-session
+decode at concurrency and a competitive single stream. SGLang lost on concurrency (16 t/s/session),
+TensorFold on context (32K), and the wamansou/gzenz forks each miss a feature.
+
+**Why IQ3_S and not NVFP4:** NVFP4 weights (~21 GB) leave no room for the 1M KV cache plus vision
+on 64 GB combined VRAM. IQ3_S (~15 GB) fits 1M + vision with ~3–6 GiB per-GPU headroom. At this
+model size the quality gap is small; the context, vision and prefix cache are not.
+
+**Tuning that got us here:** tensor-parallel prompt partials + fast prefill kernel + chunk 4096 +
+cuBLAS prompt GEMMs (**prefill +34%**, 291K: 122 s → 94 s), and putting rank 0 (LM head, vision,
+MTP) on the better-cooled card with `--devices 1,0`.
+
 ## Requirements
 
 - 2× RTX 5090 (or two 32 GB Blackwell cards); no NVLink required (PCIe host transport).
