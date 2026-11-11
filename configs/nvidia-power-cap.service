@@ -1,0 +1,13 @@
+[Unit]
+Description=Cap GPU 0 at 400 W while its cooling is weaker than GPU 1's
+After=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# GPU 0 stays at 400 W (its minimum allowed) until the cooling is upgraded.
+# Raise or drop this unit once both cards dissipate equally.
+ExecStart=/usr/bin/nvidia-smi -i 0 -pl 400
+
+[Install]
+WantedBy=multi-user.target

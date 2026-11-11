@@ -1,0 +1,16 @@
+[Unit]
+Description=NInfer — Qwen3.8-27B @ 1M context on dual RTX 5090 (TP2, vision, host KV cache, MTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust the user and the absolute paths to your checkout and model.
+User=userpro
+ExecStart=/home/userpro/ninfer-dual5090-1m/build/apps/ninfer-serve /home/userpro/models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer --devices 1,0 --tensor-parallel --tensor-parallel-transport host --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-dtype int8 --max-concurrency 8 --device-state-slots 2 --vision --vision-residency resident --spec mtp --draft-tokens 3 --host-kv-mib 32768 --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas --host 0.0.0.0 --port 30000
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

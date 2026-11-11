@@ -1,3 +1,86 @@
+# ninfer-dual5090-1m
+
+Serve **Qwen3.8-27B at a 1M-token context on two consumer RTX 5090s** (no NVLink) — with vision, a
+32 GB host-RAM KV prefix cache, MTP speculative decoding and up to 8 concurrent requests.
+
+A ready-to-build fork of [NInfer-all](https://github.com/iamwavecut/ninfer-all) that carries the
+YaRN + tensor-parallel fix ([upstream PR #327](https://github.com/iamwavecut/ninfer-all/pull/327))
+and this validated recipe. See [CREDITS.md](CREDITS.md); the upstream engine README follows below.
+
+## Measured (2× RTX 5090, Qwen3.8-27B IQ3_S)
+
+| Metric | Result |
+|---|---|
+| Decode, 1 request | ~196 tok/s |
+| Decode, 4 concurrent | 415 tok/s aggregate · 104/session |
+| Decode, 8 concurrent | 480 tok/s aggregate · 60/session |
+| Prefill, 291K cold prompt | ~3.2k tok/s (94 s), +34% over defaults |
+| Prefix reuse, 50K warm | ~115× (0.14 s) |
+| Context | 1,048,576 tokens (YaRN factor 4) |
+| Needle retrieval | correct at 291K / 631K / 874K tokens |
+| Vision | image and video |
+| GPU memory at 1M | ≈27–29 GiB per GPU (~3–6 GiB free) |
+
+## Requirements
+
+- 2× RTX 5090 (or two 32 GB Blackwell cards); no NVLink required (PCIe host transport).
+- CUDA **13.1+** for `sm_120a`.
+- ~45–61 GB system RAM (32 GB is used by the host KV cache; more is comfortable for large prefills).
+- Model `WaveCut/Qwen3.8-27B-GSQ-RCO-IQ3_S-NInfer-v3` (~15 GB).
+
+## Build
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120a
+cmake --build build -j
+```
+
+> Build **`120a`**. The default `86` produces a binary that PTX-JITs the attention kernel on sm_120
+> and hangs. This fork's rope fix is the other half of "it doesn't work on my 5090".
+
+## Model
+
+```bash
+hf download WaveCut/Qwen3.8-27B-GSQ-RCO-IQ3_S-NInfer-v3 \
+  Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer --local-dir models
+```
+
+## Serve
+
+```bash
+build/apps/ninfer-serve models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer \
+  --devices 1,0 --tensor-parallel --tensor-parallel-transport host \
+  --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-dtype int8 \
+  --max-concurrency 8 --device-state-slots 2 \
+  --vision --vision-residency resident --spec mtp --draft-tokens 3 \
+  --host-kv-mib 32768 \
+  --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas \
+  --host 0.0.0.0 --port 30000
+```
+
+OpenAI-compatible endpoint at `http://<host>:30000/v1`, model id `qwen3.8-27b`. A reboot-proof
+systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
+
+## Tuning that matters on two 5090s
+
+- **`--devices 1,0`** — rank 0 carries the token embedding, LM head, vision tower and MTP head, so it
+  runs heavier and hotter. Point rank 0 at the better-cooled card (swap the order if yours differs).
+- **Prefill, +34%** — `--tensor-parallel-prompt-partials int8` (halves the cross-GPU partial
+  exchange), `--fast-prefill-kernel`, `--prefill-chunk 4096`, `--prefill-cublas`. A 291K cold prompt
+  drops from 122 s to 94 s.
+- **Host KV cache** — `--host-kv-mib 32768` keeps large prefixes in RAM; a repeated 50K prefix
+  answers in ~0.14 s instead of re-prefilling.
+- **Thermals** — cap the card with weaker cooling at 400 W
+  ([`configs/nvidia-power-cap.service`](configs/nvidia-power-cap.service)); the other runs at 575 W.
+
+## Notes
+
+- A 1M (or 900K) cold prefill is inherently slow (~1.4–2.4k tok/s): attention runs over the whole
+  cache. The host cache is what makes follow-up turns cheap.
+- Benchmark and needle scripts are in [`scripts/`](scripts).
+
+---
+
 # NInfer-all
 
 A C++/CUDA inference engine for the Qwen3.5 model family (Qwen3.6 and Qwen3.8 27B, Qwen3.6-35B-A3B,
