@@ -82,12 +82,15 @@ enum class LinearPolicy : std::uint8_t {
     return policy == LinearPolicy::AllowPrefillCublas;
 }
 
-/// The route's width gate where the device profile names none: from here it beats the integer
-/// mainloop it replaces on every card measured. The dequantise pass costs the same whatever the
-/// token count, so a narrow call pays for it without the GEMM to amortise it; where the narrower
-/// gate lies depends on the card and on whether the width is a multiple of the integer route's
-/// 128-column tile, so a calibrated profile places it per Op (`w4_cublas/...` keys).
-inline constexpr std::int32_t kCublasPrefillMinTokens = 512;
+/// The route's width gate where the device profile names none. Measured on the 27B shapes
+/// (ninfer_w4_cublas_prefill_bench), the route it replaces below 512 is the A8 integer mainloop
+/// only at multiples of its 128-column tile and the A16 mainloop everywhere else; the cuBLAS
+/// route beats it from 129 unaligned tokens (1.4-2.8x in 129-511) and at the aligned 256 and 384,
+/// losing only below the floor. 129 is the lowest this fallback gate may go: a decode or verify
+/// round runs up to kMaximumConcurrency lanes of a 16-token window, 8 x 16 = 128 columns, through
+/// the same Ops and policies, and kCublasPrefillFloorTokens keeps those rounds off the route.
+/// Where a calibrated profile names the gate per Op (`w4_cublas/...` keys), the bands answer.
+inline constexpr std::int32_t kCublasPrefillMinTokens = 129;
 
 /// No profile moves the gate to this width or below it: a decode or verify round runs up to
 /// kMaximumConcurrency lanes of a 16-token window, 8 x 16 = 128 columns, through the same Ops and
