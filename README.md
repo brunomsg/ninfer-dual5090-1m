@@ -11,15 +11,15 @@ and this validated recipe. See [CREDITS.md](CREDITS.md); the upstream engine REA
 
 | Metric | Result |
 |---|---|
-| Decode, 1 request | ~196 tok/s |
-| Decode, 4 concurrent | 415 tok/s aggregate · 104/session |
-| Decode, 8 concurrent | 480 tok/s aggregate · 60/session |
-| Prefill, 291K cold prompt | ~3.2k tok/s (94 s), +34% over defaults |
+| Decode, 1 request | ~202 tok/s |
+| Decode, 4 concurrent | 458 tok/s aggregate · 115/session |
+| Decode, 8 concurrent | 661 tok/s aggregate · 83/session |
+| Prefill, 291K cold prompt | ~70 s (int8 KV, cuBLAS gate 129) |
 | Prefix reuse, 50K warm | ~115× (0.14 s) |
 | Context | 1,048,576 tokens (YaRN factor 4) |
 | Needle retrieval | correct at 291K / 631K / 874K tokens |
 | Vision | image and video |
-| GPU memory at 1M | ≈27–29 GiB per GPU (~3–6 GiB free) |
+| GPU memory at 1M | ≈26–28 GiB per GPU (~4–6 GiB free) |
 
 ## What we tried, and why this one
 
@@ -32,7 +32,7 @@ decode unless noted):
 | TensorFold 1.2.6 | 1 | NVFP4 | **32K** | **200** | 404 / 101 | yes | no | no | rejected: 32K only, no 1M, no cache |
 | wamansou NInfer (`ninfer-tp2-1m`) | TP2 | NVFP4 | 1M | 146 | 411 / 103 | no | no | yes | rejected: no vision, no host cache |
 | gzenz NInfer | TP2 | NVFP4 | 1M | — | — | no | yes (prefill `bad_alloc`) | yes | rejected: host-cache prefill bug |
-| **ninfer-all IQ3_S** (this fork) | TP2 | IQ3_S | **1M** | ~196 | 415 / **104** | yes | **32 GB** | yes | **chosen** |
+| **ninfer-all IQ3_S** (this fork) | TP2 | IQ3_S | **1M** | ~202 | 458 / **115** | yes | **32 GB** | yes | **chosen** |
 
 Only ninfer-all keeps **1M + vision + host prefix cache + MTP** together, with the best per-session
 decode at concurrency and a competitive single stream. SGLang lost on concurrency (16 t/s/session),
@@ -77,7 +77,7 @@ build/apps/ninfer-serve models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer \
   --devices 1,0 --tensor-parallel --tensor-parallel-transport host \
   --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-dtype int8 \
   --max-concurrency 8 --device-state-slots 2 \
-  --vision --vision-residency resident --spec mtp --draft-tokens 15 --adaptive-mtp \
+  --vision --vision-residency resident --spec mtp --draft-tokens 3 --gdn-state-fp16 \
   --host-kv-mib 32768 \
   --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas \
   --host 0.0.0.0 --port 30000
@@ -90,19 +90,36 @@ systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
 
 - **`--devices 1,0`** — rank 0 carries the token embedding, LM head, vision tower and MTP head, so it
   runs heavier and hotter. Point rank 0 at the better-cooled card (swap the order if yours differs).
-- **Prefill, +34%** — `--tensor-parallel-prompt-partials int8` (halves the cross-GPU partial
-  exchange), `--fast-prefill-kernel`, `--prefill-chunk 4096`, `--prefill-cublas`. A 291K cold prompt
-  drops from 122 s to 94 s.
+- **Prefill, 122 s → ~70 s** — `--tensor-parallel-prompt-partials int8` (halves the cross-GPU
+  partial exchange), `--fast-prefill-kernel`, `--prefill-chunk 4096`, `--prefill-cublas` and the
+  512→129 cuBLAS gate. The 2026-11-11 upstream prefill work is in the rebase.
 - **Host KV cache** — `--host-kv-mib 32768` keeps large prefixes in RAM; a repeated 50K prefix
   answers in ~0.14 s instead of re-prefilling.
-- **MTP at its best** — `--spec mtp --draft-tokens 15 --adaptive-mtp`: each round verifies
-  3–15 drafts, the width the measured draft survival and round cost favor (greedy output is
-  unchanged). A flat `--draft-tokens 3` accepts ~40–43% of proposals.
+- **MTP: three drafts, flat** — at 1M the decode is KV-bandwidth bound, so the extra verification of
+  wider windows costs more than it accepts. Measured: draft 6 = −10% at 4 sessions and −30% at 8;
+  flat `--draft-tokens 3` is best (40–43% acceptance). The verify workspace scales with
+  `(drafts+1) × lanes` at 1M, so >6 drafts no longer fit at 8 lanes. `--adaptive-mtp` is safe but
+  no win here.
+- **KV dtype: keep `int8`.** `rk8v4` matches it (291K prefill 71 s vs 70 s, equal decode) and frees
+  ~4 GiB; `k8v4` is smaller yet, but sits outside the `--fast-prefill-kernel` family, so its 291K
+  prefill takes 124 s.
+- **`--gdn-state-fp16`** halves each host state image: swap use fell from 2.7 GiB to 0.16 GiB and the
+  device runtime dropped ~0.6 GiB.
 - **cuBLAS prefill gate** — ported from the NInfer-3090 line: the fallback width gate drops from
   512 to 129 tokens, so short and unaligned prefill chunks take the cuBLAS route (the RTX 5090
   profile installs no `w4_cublas` bands, so the compiled gate is the one that applies).
 - **Thermals** — cap the card with weaker cooling at 400 W
   ([`configs/nvidia-power-cap.service`](configs/nvidia-power-cap.service)); the other runs at 575 W.
+
+### Measured variants (base config unless stated)
+
+| Variant | 1 | 4-conc | 8-conc | 291K prefill |
+|---|---|---|---|---|
+| **int8 KV, draft 3 (chosen)** | **202** | **115** | **83** | **70 s** |
+| rk8v4 KV, draft 3 | 187 | 116 | 79 | 71 s |
+| k8v4 KV, draft 3 | 191 | 118 | 81 | 124 s |
+| int8, draft 6 flat | 172 | 89 | 59 | — |
+| k8v4, draft 3, `--decode-rounds-per-prefill 1` | 216 | 104 | 77 | — |
 
 ## Notes
 
