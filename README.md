@@ -43,8 +43,17 @@ on 64 GB combined VRAM. IQ3_S (~15 GB) fits 1M + vision with ~3–6 GiB per-GPU 
 model size the quality gap is small; the context, vision and prefix cache are not.
 
 **Tuning that got us here:** tensor-parallel prompt partials + fast prefill kernel + chunk 4096 +
-cuBLAS prompt GEMMs (**prefill +34%**, 291K: 122 s → 94 s), and putting rank 0 (LM head, vision,
-MTP) on the better-cooled card with `--devices 1,0`.
+cuBLAS prompt GEMMs and the 512→129 gate (**291K cold prefill: 122 s → ~70 s**), and putting rank 0
+(LM head, vision, MTP) on the better-cooled card with `--devices 1,0`.
+
+## Version
+
+**v1.0.0 (2026-11-12).** Built and measured on the two-card box: `iamwavecut/ninfer-all@5dffc426`
+plus the YaRN/TP2 rope fix ([PR #327](https://github.com/iamwavecut/ninfer-all/pull/327)) and the
+ported cuBLAS prefill gate (512→129). Serving Qwen3.8-27B IQ3_S at 1M with int8 KV, vision, a 32 GB
+host KV cache, flat 3-draft MTP and `--gdn-state-fp16`: **202 / 458 / 661 tok/s at 1 / 4 / 8
+concurrent**, 291K cold prefill **~70 s**, needles correct to **874K**. Full A/B in
+[Measured variants](#measured-variants-base-config-unless-stated).
 
 ## Requirements
 
@@ -123,8 +132,9 @@ systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
 
 ## Notes
 
-- A 1M (or 900K) cold prefill is inherently slow (~1.4–2.4k tok/s): attention runs over the whole
-  cache. The host cache is what makes follow-up turns cheap.
+- A cold prefill is inherently slow as the context grows: ~4.2k tok/s at 291K, falling to
+  ~1.4–2.4k tok/s near 1M as attention runs over the whole cache. The host cache is what makes
+  follow-up turns cheap.
 - Benchmark and needle scripts are in [`scripts/`](scripts).
 
 ---
