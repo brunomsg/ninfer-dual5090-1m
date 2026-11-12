@@ -77,7 +77,7 @@ build/apps/ninfer-serve models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer \
   --devices 1,0 --tensor-parallel --tensor-parallel-transport host \
   --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-dtype int8 \
   --max-concurrency 8 --device-state-slots 2 \
-  --vision --vision-residency resident --spec mtp --draft-tokens 3 \
+  --vision --vision-residency resident --spec mtp --draft-tokens 15 --adaptive-mtp \
   --host-kv-mib 32768 \
   --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas \
   --host 0.0.0.0 --port 30000
@@ -95,6 +95,12 @@ systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
   drops from 122 s to 94 s.
 - **Host KV cache** — `--host-kv-mib 32768` keeps large prefixes in RAM; a repeated 50K prefix
   answers in ~0.14 s instead of re-prefilling.
+- **MTP at its best** — `--spec mtp --draft-tokens 15 --adaptive-mtp`: each round verifies
+  3–15 drafts, the width the measured draft survival and round cost favor (greedy output is
+  unchanged). A flat `--draft-tokens 3` accepts ~40–43% of proposals.
+- **cuBLAS prefill gate** — ported from the NInfer-3090 line: the fallback width gate drops from
+  512 to 129 tokens, so short and unaligned prefill chunks take the cuBLAS route (the RTX 5090
+  profile installs no `w4_cublas` bands, so the compiled gate is the one that applies).
 - **Thermals** — cap the card with weaker cooling at 400 W
   ([`configs/nvidia-power-cap.service`](configs/nvidia-power-cap.service)); the other runs at 575 W.
 
