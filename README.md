@@ -130,6 +130,21 @@ systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
 | int8, draft 6 flat | 172 | 89 | 59 | — |
 | k8v4, draft 3, `--decode-rounds-per-prefill 1` | 216 | 104 | 77 | — |
 
+### KV dtype and attention-partition sweep (2026-11-12, after the 40 GiB host-KV/60 GB RAM upgrade)
+
+291K cold prefill and short-answer decode, base config:
+
+| KV dtype | 291K prefill | 1 | 4-conc | 8-conc | free VRAM |
+|---|---|---|---|---|---|
+| **int8 (chosen)** | **70 s** | 202 | **115** | **83** | 3.7 GiB |
+| fp8 | 123 s | 211 | 36 | 43 | 4.1 GiB |
+| nvfp4 | **68 s** | 192 | 36 | 44 | **11.7 GiB** |
+
+fp8 and nvfp4 keep prefill but collapse the **batched** decode (36–44/session against 115), so they
+are rejected for team use; nvfp4's 11.7 GiB free is noted for a future all-NVFP4-weights test (mixing
+IQ3_S weights with an FP4 KV likely explains the collapse). `--tensor-attention positions` collapsed
+prefill to ~400–700 tok/s and is rejected.
+
 ### DFlash2 experiment (2026-11-12)
 
 The IQ3_S artifact already carries a `dflash2` component (container: text + vision + mtp + dflash2),
