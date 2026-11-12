@@ -130,6 +130,25 @@ systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
 | int8, draft 6 flat | 172 | 89 | 59 | — |
 | k8v4, draft 3, `--decode-rounds-per-prefill 1` | 216 | 104 | 77 | — |
 
+### DFlash2 experiment (2026-11-12)
+
+The IQ3_S artifact already carries a `dflash2` component (container: text + vision + mtp + dflash2),
+so no download or conversion is needed. At 1M × 8 it does **not** fit with int8 KV (the drafter adds
+~2 GiB and the verify workspace needs 26.2 GiB against 23.3 available); it fits with `rk4v4`:
+
+| Variant | prose 1 / 4 / 8 | code 1 / 4 / 8 | 291K prefill | needle |
+|---|---|---|---|---|
+| int8 + MTP 3 (shipped) | 196 / 116 / 81 | 263 / 123 / 71 | 70 s | ✅ |
+| rk8v4 + MTP 3 | 194 / 111 / 82 | 232 / 110 / 77 | 71 s | ✅ |
+| **rk4v4 + DFlash2 5** | **226 / 119 / 73** | 241 / **127** / **79** | 84 s | ✅ (291K) |
+| rk4v4 + DFlash2 7 | 193 / 109 / 67 | 218 / 112 / 70 | — | — |
+
+DFlash2 wins at 1–4 concurrent (+17% prose single, +15% code at 4) and loses at 8 on prose (−11%);
+MTP still wins the 8-session mix. The large DFlash2 gains reported elsewhere on code (35B-A3B /
+NVFP4) did not replicate on this 3-bit 27B with 256-token outputs: accepted drafts ≈ 34–38% versus
+MTP's 41%. The shipped config stays **int8 + MTP 3**; the option
+`--kv-dtype rk4v4 --spec dflash2 --draft-tokens 5` suits 1–4 concurrent code sessions.
+
 ## Notes
 
 - A cold prefill is inherently slow as the context grows: ~4.2k tok/s at 291K, falling to
