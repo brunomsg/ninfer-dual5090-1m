@@ -149,6 +149,11 @@ NVFP4) did not replicate on this 3-bit 27B with 256-token outputs: accepted draf
 MTP's 41%. The shipped config stays **int8 + MTP 3**; the option
 `--kv-dtype rk4v4 --spec dflash2 --draft-tokens 5` suits 1–4 concurrent code sessions.
 
+Keeping 8-bit KV (`rk8v4`) and cutting lanes so DFlash2 fits was also measured: 4 lanes (prose
+190/119/60, code 264/112/73) and 6 lanes (prose 211/114/59, code 209/121/66, needle 291K ✅,
+prefill 84 s). Both lose the 8-session throughput the shipped config keeps (80/71), and DFlash2 7 is
+worse than 5 at every lane count. Not adopted.
+
 ## Notes
 
 - A cold prefill is inherently slow as the context grows: ~4.2k tok/s at 291K, falling to
