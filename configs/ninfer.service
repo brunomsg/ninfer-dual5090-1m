@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 # Adjust the user and the absolute paths to your checkout and model.
 User=userpro
-ExecStart=/home/userpro/ninfer-dual5090-1m/build/apps/ninfer-serve /home/userpro/models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer --devices 1,0 --tensor-parallel --tensor-parallel-transport host --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-dtype int8 --max-concurrency 8 --device-state-slots 2 --vision --vision-residency resident --spec mtp --draft-tokens 3 --gdn-state-fp16 --host-kv-mib 32768 --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas --host 0.0.0.0 --port 30000
+ExecStart=/home/userpro/ninfer-all/build/apps/ninfer-serve /home/userpro/ninfer-all/models_iq3/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer --devices 1,0 --tensor-parallel --tensor-parallel-transport auto --rope-yarn --rope-yarn-factor 4.0 --max-context 1048576 --kv-capacity 1507328 --kv-dtype rk8v4 --max-concurrency 8 --device-state-slots 2 --vision --vision-residency cpu --spec mtp --draft-tokens 3 --adaptive-mtp --gdn-state-fp16 --host-kv-mib 42000 --tensor-parallel-prompt-partials int8 --fast-prefill-kernel --prefill-chunk 4096 --prefill-cublas --concurrent-prefill --kv-lease-growth --thorough-admission-search --auto-long-anchors --max-long-anchors-per-continuation 64 --long-anchor-spacing 256 --branch-anchors --auto-prefix-grid --disk-kv-path /var/cache/ninfer --disk-kv-gib 500 --disk-kv-restore --host 0.0.0.0 --port 30000
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=1048576

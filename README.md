@@ -21,6 +21,48 @@ and this validated recipe. See [CREDITS.md](CREDITS.md); the upstream engine REA
 | Vision | image and video |
 | GPU memory at 1M | ≈26–28 GiB per GPU (~4–6 GiB free) |
 
+## Current deployment (2026-11-13)
+
+Production unit: [`configs/ninfer.service`](configs/ninfer.service). Endpoint `http://<host>:30000/v1`,
+model `qwen3.8-27b`. Box: 60 GB→**62 GB** RAM, swap off, GPU0 capped 400 W, GPU1 575 W.
+
+| Layer | Setting |
+|---|---|
+| VRAM KV pool | `--kv-capacity 1507328` tokens, `--kv-dtype rk8v4` (1.58M shared pool) |
+| Host tier | `--host-kv-mib 42000` (42 GiB, ≈90% of RAM) |
+| NVMe tier | `--disk-kv-path /var/cache/ninfer --disk-kv-gib 500 --disk-kv-restore` |
+| Cache | `--auto-long-anchors --max-long-anchors-per-continuation 64 --long-anchor-spacing 256 --branch-anchors --auto-prefix-grid` |
+| Admission | `--concurrent-prefill --thorough-admission-search --kv-lease-growth` |
+| Prefill | `int8` partials, fast kernel, chunk 4096, cuBLAS gate |
+| Spec | `--spec mtp --draft-tokens 3 --adaptive-mtp` |
+| Other | `--gdn-state-fp16`, `--vision-residency cpu`, `--tensor-parallel-transport auto` |
+
+**Applied in the 2026-11-13 tuning pass (measured, kept):** `--tensor-parallel-transport auto`
+(times host vs PCIe peer at startup), `--vision-residency cpu` (moves the vision tower off the tight
+card; `overlay` cannot combine with `--devices`), `--adaptive-mtp`, `--kv-lease-growth` (reserve a
+4096-token window instead of the whole `max_tokens`), `--thorough-admission-search` (up to 250 ms to
+find a reuse plan even while others decode), `--branch-anchors` (anchor where a prompt diverges so
+the next diverging request resumes there). Dropped `--context-cache-policy rolling` (suspected of
+evicting a prefix shared by several sessions).
+
+**Rejected by the engine, not a choice:** `--vision-residency overlay` with `--devices`;
+`--lm-head-q6`/`--embedding-q6` (this IQ3_S artifact does not store the head as row-split Q8_G32);
+`--host-cache-mib auto` with 64 anchors (needs 83 GB of host state images).
+
+**Clients (opencode):** sessions cap at ~405K (`limit.context 540000`, `compaction.buffer 25%`,
+`keep.tokens 24000`, `experimental.background_compaction`), so a conversation compacts before it
+reaches the costly 800K prefill band; the server still accepts 1M.
+
+**Already in the engine — no work needed:** clean-shutdown flush of resident *catalogued*
+continuations to the disk tier (`flush_disk_tier()` on `ProgramCleanup::Shutdown`, 60 s budget),
+restored by `--disk-kv-restore`.
+
+**Upstream drift:** the 36 commits past `5dffc426` (through `72d1d8e0`) are all CI/release sharding
+and the Edge0-145B/Flash-Next family; nothing applies to this Qwen3.5-core TP2 setup.
+
+**Pending:** needle validation of `rk8v4` at 631K/874K (fall back to `int8` at 1.0M if it fails);
+end-to-end restore test after a graceful restart.
+
 ## What we tried, and why this one
 
 The engines evaluated for this box (our own measurements on the same two RTX 5090s, short-answer
@@ -93,7 +135,9 @@ build/apps/ninfer-serve models/Qwen3.8-27B-GSQ-RCO-IQ3_S-ninfer-v3.ninfer \
 ```
 
 OpenAI-compatible endpoint at `http://<host>:30000/v1`, model id `qwen3.8-27b`. A reboot-proof
-systemd unit is in [`configs/ninfer.service`](configs/ninfer.service).
+systemd unit is in [`configs/ninfer.service`](configs/ninfer.service). The measured production
+flags (rk8v4, 1.5M pool, 42 GiB host KV, 64 anchors, disk tier) are in
+[Current deployment](#current-deployment-2026-11-13) and that unit.
 
 ## Tuning that matters on two 5090s
 
